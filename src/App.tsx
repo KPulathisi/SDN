@@ -65,7 +65,7 @@ function App() {
   }, [setUser, setLoading]);
 
   return (
-    <Router>
+    <Router basename="/SDN">
       <Toaster position="top-right" />
       <Routes>
         <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
