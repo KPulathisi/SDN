@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Users as UsersIcon, UserPlus, Search, Shield, Building2, Mail, MoreVertical, Loader2, CheckCircle2 } from 'lucide-react';
-import { collection, query, onSnapshot } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import toast from 'react-hot-toast';
 
 interface UserRecord {
   id: string;
@@ -21,9 +22,6 @@ const Users: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
-    // In a real app, users might be in a 'profiles' collection
-    // and sensitive Auth data is handled by Firebase Admin SDK.
-    // For this MVP, we'll fetch from a 'users' collection used for profile metadata.
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const userList = snapshot.docs.map(doc => ({
@@ -39,6 +37,25 @@ const Users: React.FC = () => {
 
     return () => unsubscribe();
   }, []);
+
+  const handleRoleChange = async (userId: string, newRole: string) => {
+    try {
+      await updateDoc(doc(db, 'users', userId), { role: newRole });
+      toast.success('User role updated');
+    } catch (error: any) {
+      toast.error('Failed to update role: ' + error.message);
+    }
+  };
+
+  const handleToggleStatus = async (userId: string, currentStatus: string) => {
+    try {
+      const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+      await updateDoc(doc(db, 'users', userId), { status: newStatus });
+      toast.success(`User marked as ${newStatus}`);
+    } catch (error: any) {
+      toast.error('Failed to update status: ' + error.message);
+    }
+  };
 
   const filteredUsers = users.filter(u => 
     u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -130,9 +147,16 @@ const Users: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase border ${getRoleBadgeColor(user.role)}`}>
-                        {user.role.replace('_', ' ')}
-                      </span>
+                      <select
+                        value={user.role}
+                        onChange={(e) => handleRoleChange(user.id, e.target.value)}
+                        className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase border bg-transparent outline-none ${getRoleBadgeColor(user.role)}`}
+                      >
+                        <option value="head_office">Head Office</option>
+                        <option value="rdc_staff">RDC Staff</option>
+                        <option value="logistics">Logistics</option>
+                        <option value="retail_customer">Retail Customer</option>
+                      </select>
                     </td>
                     <td className="px-6 py-4">
                       <div className="text-sm text-gray-600 dark:text-gray-400 flex items-center gap-1.5">
@@ -141,10 +165,13 @@ const Users: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-1.5">
+                      <button 
+                        onClick={() => handleToggleStatus(user.id, user.status)}
+                        className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+                      >
                         <div className={`w-2 h-2 rounded-full ${user.status === 'active' ? 'bg-green-500' : 'bg-gray-400'}`} />
                         <span className="text-sm text-gray-700 dark:text-gray-300 capitalize">{user.status}</span>
-                      </div>
+                      </button>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button className="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors text-gray-500">

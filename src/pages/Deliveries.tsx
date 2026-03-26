@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Truck, Search, Loader2, Calendar, User, Navigation, Plus } from 'lucide-react';
-import { collection, query, onSnapshot, getDocs, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/auth';
 import { Delivery, Order } from '../types';
@@ -9,52 +9,90 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import ScheduleDeliveryModal from '../components/deliveries/ScheduleDeliveryModal';
+import DeliveryDetailsModal from '../components/deliveries/DeliveryDetailsModal';
+import { User as UserType } from '../types';
 
 const Deliveries: React.FC = () => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [orders, setOrders] = useState<Record<string, Order>>({});
+  const [drivers, setDrivers] = useState<Record<string, UserType>>({});
+  const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [selectedDelivery, setSelectedDelivery] = useState<Delivery | null>(null);
+  const [selectedOrderToSchedule, setSelectedOrderToSchedule] = useState<Order | null>(null);
+
   const { user, hasRole } = useAuthStore();
 
   useEffect(() => {
     if (!user) return;
 
-    // Fetch orders for reference
+    // Fetch orders for reference and filtering
     const fetchOrders = async () => {
-      const orderSnap = await getDocs(collection(db, 'orders'));
+      let orderQuery = query(collection(db, 'orders'));
+      if (hasRole('retail_customer')) {
+        orderQuery = query(collection(db, 'orders'), where('customerId', '==', user.id));
+      } else if (hasRole('rdc_staff') && user.rdcId) {
+        orderQuery = query(collection(db, 'orders'), where('rdcId', '==', user.rdcId));
+      }
+      
+      const orderSnap = await getDocs(orderQuery);
       const orderMap: Record<string, Order> = {};
+      const pending: Order[] = [];
       orderSnap.docs.forEach(doc => {
         const data = doc.data();
-        orderMap[doc.id] = { 
+        const o = { 
           id: doc.id, 
           ...data,
           createdAt: data.createdAt?.toDate() || new Date(),
           estimatedDelivery: data.estimatedDelivery?.toDate() || new Date(),
         } as Order;
+        orderMap[doc.id] = o;
+        if (o.status === 'confirmed') pending.push(o);
       });
       setOrders(orderMap);
+      setAvailableOrders(pending);
+    };
+
+    const fetchDrivers = async () => {
+      const q = query(collection(db, 'users'), where('role', '==', 'logistics'));
+      const snap = await getDocs(q);
+      const map: Record<string, UserType> = {};
+      snap.docs.forEach(doc => map[doc.id] = { id: doc.id, ...doc.data() } as UserType);
+      setDrivers(map);
     };
 
     fetchOrders();
+    fetchDrivers();
 
     // Real-time deliveries listener
     let q = query(collection(db, 'deliveries'));
-    if (hasRole('retail_customer')) {
-      // Typically deliveries don't have customerId directly, we link via orderId
-      // For now, HO/Logistics see all, RDC see theirs
-    } else if (hasRole('rdc_staff') && user.rdcId) {
-      // Filter logic would be via order lookup, but for MVP let's assume all for staff
-    }
+    // If retail customer, we typically need to filter by orderId IN [list of orderIds]
+    // Firestore lacks small 'IN' list efficiency for many orders, but for MVP we'll filter on client 
+    // or assume deliveries collection has custom filters if needed.
+    // For now, if customer, we only show deliveries if we have the order record locally.
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const deliveryList = snapshot.docs.map(doc => ({
+      let deliveryList = snapshot.docs.map(doc => ({
         ...doc.data(),
         id: doc.id,
         scheduledDate: doc.data().scheduledDate?.toDate() || new Date(),
         actualDelivery: doc.data().actualDelivery?.toDate(),
       })) as Delivery[];
+
+      // Client-side filtering for MVP
+      if (hasRole('retail_customer')) {
+        const myOrderIds = new Set(Object.keys(orders));
+        deliveryList = deliveryList.filter(d => myOrderIds.has(d.orderId));
+      } else if (hasRole('rdc_staff') && user.rdcId) {
+        // Only show deliveries where the order belongs to this RDC
+        deliveryList = deliveryList.filter(d => orders[d.orderId]?.rdcId === user.rdcId);
+      }
+
       setDeliveries(deliveryList);
       setIsLoading(false);
     }, (error) => {
@@ -63,7 +101,7 @@ const Deliveries: React.FC = () => {
     });
 
     return () => unsubscribe();
-  }, [user, hasRole]);
+  }, [user, hasRole, orders]);
 
   const handleUpdateStatus = async (deliveryId: string, newStatus: Delivery['status']) => {
     try {
@@ -110,8 +148,15 @@ const Deliveries: React.FC = () => {
           </p>
         </div>
 
-        {hasRole(['logistics', 'head_office']) && (
-          <Button>
+        {hasRole(['rdc_staff', 'head_office']) && (
+          <Button onClick={() => {
+            if (availableOrders.length > 0) {
+              setSelectedOrderToSchedule(availableOrders[0]);
+              setIsScheduleOpen(true);
+            } else {
+              toast.error('No pending orders to schedule');
+            }
+          }}>
             <Plus className="w-4 h-4 mr-2" />
             Schedule Delivery
           </Button>
@@ -155,7 +200,10 @@ const Deliveries: React.FC = () => {
                           {orders[delivery.orderId]?.deliveryAddress || 'Address Loading...'}
                         </h3>
                         <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400">
-                          <span className="flex items-center gap-1.5"><User className="w-4 h-4" /> Driver: {delivery.driverId}</span>
+                          <span className="flex items-center gap-1.5">
+                            <User className="w-4 h-4" /> 
+                            Driver: {drivers[delivery.driverId]?.name || delivery.driverId}
+                          </span>
                           <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4" /> Scheduled: {format(delivery.scheduledDate, 'MMM d, h:mm a')}</span>
                         </div>
                       </div>
@@ -168,10 +216,31 @@ const Deliveries: React.FC = () => {
                             Complete Delivery
                           </Button>
                         )}
-                        <Button variant="outline" size="sm">Details</Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => {
+                            setSelectedDelivery(delivery);
+                            setIsDetailsOpen(true);
+                          }}
+                        >
+                          Details
+                        </Button>
                       </div>
                     </div>
-                  </div>
+                    <ScheduleDeliveryModal 
+        isOpen={isScheduleOpen} 
+        onClose={() => setIsScheduleOpen(false)} 
+        order={selectedOrderToSchedule} 
+      />
+      <DeliveryDetailsModal 
+        isOpen={isDetailsOpen} 
+        onClose={() => setIsDetailsOpen(false)} 
+        delivery={selectedDelivery} 
+        order={selectedDelivery ? orders[selectedDelivery.orderId] : null}
+        driver={selectedDelivery ? drivers[selectedDelivery.driverId] : null}
+      />
+    </div>
                 ))}
                 {filteredDeliveries.length === 0 && (
                   <div className="p-12 text-center text-gray-500">

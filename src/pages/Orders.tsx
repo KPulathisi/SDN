@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Plus, Search, Filter, Loader2 } from 'lucide-react';
 import OrderCard from '../components/orders/OrderCard';
 import OrderTrackingModal from '../components/orders/OrderTrackingModal';
+import CreateOrderModal from '../components/orders/CreateOrderModal';
 import Button from '../components/ui/Button';
 import { Order, OrderStatus } from '../types';
 import { useAuthStore } from '../store/auth';
@@ -16,6 +17,7 @@ const Orders: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<OrderStatus | ''>('');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isTrackingOpen, setIsTrackingOpen] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
   const { user, hasRole } = useAuthStore();
 
   useEffect(() => {
@@ -88,12 +90,18 @@ const Orders: React.FC = () => {
         </div>
 
         {hasRole(['rdc_staff', 'head_office']) && (
-          <Button>
+          <Button onClick={() => setIsCreateOpen(true)}>
             <Plus className="w-4 h-4" />
             New Order
           </Button>
         )}
       </motion.div>
+
+      <CreateOrderModal 
+        isOpen={isCreateOpen} 
+        onClose={() => setIsCreateOpen(false)} 
+        rdcId={user?.rdcId || 'central-rdc'} 
+      />
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}

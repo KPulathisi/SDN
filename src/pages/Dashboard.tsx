@@ -13,8 +13,9 @@ import { useAuthStore } from '../store/auth';
 import KPICard from '../components/dashboard/KPICard';
 import Card from '../components/ui/Card';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { formatDistanceToNow } from 'date-fns';
 
 const Dashboard: React.FC = () => {
   const { user, hasRole } = useAuthStore();
@@ -27,15 +28,13 @@ const Dashboard: React.FC = () => {
     inventory: 0,
     deliveriesCount: 0,
   });
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
 
   useEffect(() => {
     if (!user) return;
 
     const fetchStats = async () => {
       try {
-        // In a real app, these would be aggregated or server-side. 
-        // For MVP, we'll fetch and count.
-        
         let ordersQuery = query(collection(db, 'orders'));
         if (hasRole('retail_customer')) {
           ordersQuery = query(collection(db, 'orders'), where('customerId', '==', user.id));
@@ -61,7 +60,7 @@ const Dashboard: React.FC = () => {
 
         let deliveriesCount = 0;
         if (hasRole(['head_office', 'logistics', 'rdc_staff'])) {
-          const delQuery = query(collection(db, 'deliveries')); // Filter logic could be more complex
+          const delQuery = query(collection(db, 'deliveries'));
           const delSnapshot = await getDocs(delQuery);
           deliveriesCount = delSnapshot.docs.length;
         }
@@ -74,6 +73,32 @@ const Dashboard: React.FC = () => {
           inventory: inventoryCount,
           deliveriesCount: deliveriesCount,
         });
+
+        const [recentOrders, recentDeliv, recentPay] = await Promise.all([
+          getDocs(query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(5))),
+          getDocs(query(collection(db, 'deliveries'), orderBy('createdAt', 'desc'), limit(5))),
+          getDocs(query(collection(db, 'payments'), orderBy('createdAt', 'desc'), limit(5)))
+        ]);
+
+        const activities = [
+          ...recentOrders.docs.map(d => ({ 
+            action: `New order #${d.id.slice(-6).toUpperCase()}`, 
+            time: d.data().createdAt?.toDate() || new Date(), 
+            type: 'order' 
+          })),
+          ...recentDeliv.docs.map(d => ({ 
+            action: `Delivery ${d.data().status}`, 
+            time: d.data().createdAt?.toDate() || new Date(), 
+            type: 'delivery' 
+          })),
+          ...recentPay.docs.map(d => ({ 
+            action: `Payment received ($${d.data().amount})`, 
+            time: d.data().createdAt?.toDate() || new Date(), 
+            type: 'payment' 
+          }))
+        ].sort((a, b) => b.time.getTime() - a.time.getTime()).slice(0, 6);
+
+        setRecentActivity(activities);
       } catch (error) {
         console.error('Error fetching dashboard stats:', error);
       } finally {
@@ -84,7 +109,6 @@ const Dashboard: React.FC = () => {
     fetchStats();
   }, [user, hasRole]);
 
-  // Demo data for charts
   const salesData = [
     { name: 'Jan', value: 4000 },
     { name: 'Feb', value: 3000 },
@@ -182,12 +206,7 @@ const Dashboard: React.FC = () => {
               Recent Activity
             </h3>
             <div className="space-y-4">
-              {[
-                { action: 'New order #1234', time: '2 minutes ago', type: 'order' },
-                { action: 'Stock updated for SKU-001', time: '15 minutes ago', type: 'inventory' },
-                { action: 'Payment received', time: '1 hour ago', type: 'payment' },
-                { action: 'Delivery completed', time: '2 hours ago', type: 'delivery' },
-              ].map((activity, index) => (
+              {recentActivity.map((activity, index) => (
                 <motion.div
                   key={index}
                   initial={{ opacity: 0, x: -20 }}
@@ -199,7 +218,9 @@ const Dashboard: React.FC = () => {
                     <p className="font-medium text-gray-900 dark:text-white">
                       {activity.action}
                     </p>
-                    <p className="text-sm text-gray-500">{activity.time}</p>
+                    <p className="text-sm text-gray-500">
+                      {formatDistanceToNow(activity.time, { addSuffix: true })}
+                    </p>
                   </div>
                   <div className={`w-3 h-3 rounded-full ${
                     activity.type === 'order' ? 'bg-blue-500' :
@@ -209,6 +230,9 @@ const Dashboard: React.FC = () => {
                   }`} />
                 </motion.div>
               ))}
+              {recentActivity.length === 0 && (
+                <div className="text-center py-8 text-gray-500">No recent activity</div>
+              )}
             </div>
           </Card>
         </div>

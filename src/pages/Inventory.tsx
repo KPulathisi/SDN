@@ -8,6 +8,8 @@ import { InventoryItem, Product, RDC } from '../types';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import StockTransferModal from '../components/inventory/StockTransferModal';
+import StockAdjustModal from '../components/inventory/StockAdjustModal';
+import StockHistoryModal from '../components/inventory/StockHistoryModal';
 
 const Inventory: React.FC = () => {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -16,6 +18,8 @@ const Inventory: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [isAdjustOpen, setIsAdjustOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   
   const { user, hasRole } = useAuthStore();
 
@@ -84,7 +88,7 @@ const Inventory: React.FC = () => {
         </div>
 
         <div className="flex gap-2">
-          <Button variant="outline">
+          <Button variant="outline" onClick={() => setIsHistoryOpen(true)}>
             <History className="w-4 h-4 mr-2" />
             Stock History
           </Button>
@@ -211,7 +215,12 @@ const Inventory: React.FC = () => {
                         )}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <button className="text-blue-500 hover:text-blue-600 font-semibold text-sm">Adjust</button>
+                        <button 
+                          onClick={() => setIsAdjustOpen(true)}
+                          className="text-blue-500 hover:text-blue-600 font-semibold text-sm"
+                        >
+                          Adjust
+                        </button>
                       </td>
                     </motion.tr>
                   );
@@ -221,6 +230,16 @@ const Inventory: React.FC = () => {
           </div>
         )}
       </Card>
+      <StockAdjustModal 
+        isOpen={isAdjustOpen} 
+        onClose={() => setIsAdjustOpen(false)} 
+        rdcId={user?.rdcId || 'central-rdc'} 
+      />
+      <StockHistoryModal 
+        isOpen={isHistoryOpen} 
+        onClose={() => setIsHistoryOpen(false)} 
+        rdcId={user?.rdcId || 'central-rdc'} 
+      />
     </div>
   );
 };

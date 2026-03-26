@@ -6,6 +6,6 @@ export default defineConfig({
   plugins: [react()],
   base: '/SDN/',
   optimizeDeps: {
-    exclude: ['lucide-react'],
+    include: ['react-is', 'recharts', 'react-leaflet', 'leaflet'],
   },
 });

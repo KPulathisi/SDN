@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ShoppingBag, MapPin, CheckCircle, Truck } from 'lucide-react';
+import { X, ShoppingBag, MapPin, CheckCircle, Truck, CreditCard } from 'lucide-react';
 import { useCartStore } from '../../store/cart';
 import { useAuthStore } from '../../store/auth';
 import Button from '../ui/Button';
@@ -14,10 +14,11 @@ interface CheckoutModalProps {
 }
 
 const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
-  const [step, setStep] = useState<'cart' | 'address' | 'confirmation'>('cart');
+  const [step, setStep] = useState<'cart' | 'address' | 'payment' | 'confirmation'>('cart');
   const [loading, setLoading] = useState(false);
   const [address, setAddress] = useState('');
   const [orderId, setOrderId] = useState('');
+  const [paymentData, setPaymentData] = useState({ cardName: '', cardNumber: '', expiry: '', cvv: '' });
   
   const { items, getTotalPrice, clearCart, removeItem, updateQuantity } = useCartStore();
   const { user } = useAuthStore();
@@ -30,7 +31,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
       const totalAmount = getTotalPrice();
       const orderData = {
         customerId: user.id,
-        rdcId: user.rdcId || 'central-rdc', // Default or derived
+        rdcId: user.rdcId || 'central-rdc',
         items: items.map(item => ({
           productId: item.product.id,
           quantity: item.quantity,
@@ -40,22 +41,30 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
         totalAmount,
         status: 'pending',
         deliveryAddress: address,
-        estimatedDelivery: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days
+        estimatedDelivery: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
-      const docRef = await addDoc(collection(db, 'orders'), orderData);
-      setOrderId(docRef.id);
-      
-      // We could also update inventory here via a batch, but typically 
-      // that's done when the order is "confirmed" by RDC staff.
+      const orderRef = await addDoc(collection(db, 'orders'), orderData);
+      setOrderId(orderRef.id);
+
+      // Create Payment document
+      await addDoc(collection(db, 'payments'), {
+        orderId: orderRef.id,
+        customerId: user.id,
+        amount: totalAmount,
+        status: 'completed', // Dummy payment always succeeds
+        method: 'card',
+        createdAt: serverTimestamp(),
+        paidAt: serverTimestamp(),
+      });
       
       clearCart();
       setStep('confirmation');
-      toast.success('Order placed successfully!');
+      toast.success('Order placed and payment confirmed!');
     } catch (error: any) {
-      toast.error('Failed to place order: ' + error.message);
+      toast.error('Failed to process: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -75,6 +84,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             {step === 'cart' && <><ShoppingBag className="w-6 h-6 text-blue-500" /> My Cart</>}
             {step === 'address' && <><MapPin className="w-6 h-6 text-blue-500" /> Delivery Address</>}
+            {step === 'payment' && <><CreditCard className="w-6 h-6 text-blue-500" /> Secure Payment</>}
             {step === 'confirmation' && <><CheckCircle className="w-6 h-6 text-green-500" /> Order Confirmed</>}
           </h2>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors">
@@ -159,6 +169,87 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
               </motion.div>
             )}
 
+            {step === 'payment' && (
+              <motion.div
+                key="payment"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-6"
+              >
+                <div className="bg-gray-900 p-6 rounded-2xl text-white shadow-xl relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-8 opacity-10">
+                    <CreditCard className="w-32 h-32" />
+                  </div>
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-8">
+                      <div className="w-12 h-10 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-lg shadow-inner" />
+                      <span className="font-bold text-xl italic text-gray-300">CARD</span>
+                    </div>
+                    <div className="space-y-6">
+                      <div className="text-2xl font-mono tracking-widest break-all">
+                        {paymentData.cardNumber || '•••• •••• •••• ••••'}
+                      </div>
+                      <div className="flex justify-between items-end">
+                        <div className="space-y-1">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wider">Card Holder</p>
+                          <p className="font-medium tracking-wide uppercase">{paymentData.cardName || 'YOUR NAME'}</p>
+                        </div>
+                        <div className="space-y-1 text-right">
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wider">Expires</p>
+                          <p className="font-medium tracking-wide">{paymentData.expiry || 'MM/YY'}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Cardholder Name</label>
+                    <input
+                      type="text"
+                      value={paymentData.cardName}
+                      onChange={(e) => setPaymentData({ ...paymentData, cardName: e.target.value })}
+                      placeholder="e.g. John Doe"
+                      className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Card Number</label>
+                    <input
+                      type="text"
+                      value={paymentData.cardNumber}
+                      onChange={(e) => setPaymentData({ ...paymentData, cardNumber: e.target.value })}
+                      placeholder="0000 0000 0000 0000"
+                      className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Expiry Date</label>
+                    <input
+                      type="text"
+                      value={paymentData.expiry}
+                      onChange={(e) => setPaymentData({ ...paymentData, expiry: e.target.value })}
+                      placeholder="MM/YY"
+                      className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">CVV</label>
+                    <input
+                      type="password"
+                      value={paymentData.cvv}
+                      onChange={(e) => setPaymentData({ ...paymentData, cvv: e.target.value })}
+                      placeholder="•••"
+                      maxLength={3}
+                      className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {step === 'confirmation' && (
               <motion.div
                 key="confirmation"
@@ -195,16 +286,27 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose }) => {
                 >
                   Continue to Address
                 </Button>
+              ) : step === 'address' ? (
+                <>
+                  <Button variant="secondary" onClick={() => setStep('cart')}>Back</Button>
+                  <Button 
+                    disabled={!address.trim()} 
+                    onClick={() => setStep('payment')}
+                    className="flex-1"
+                  >
+                    Continue to Payment
+                  </Button>
+                </>
               ) : (
                 <>
-                  <Button variant="secondary" onClick={() => setStep('cart')} disabled={loading}>Back</Button>
+                  <Button variant="secondary" onClick={() => setStep('address')} disabled={loading}>Back</Button>
                   <Button 
                     onClick={handlePlaceOrder} 
                     loading={loading} 
-                    disabled={!address.trim()}
+                    disabled={!paymentData.cardNumber || !paymentData.cardName}
                     className="flex-1"
                   >
-                    Place Order
+                    Pay & Place Order
                   </Button>
                 </>
               )}

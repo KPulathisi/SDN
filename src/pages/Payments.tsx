@@ -1,36 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { DollarSign, CreditCard, Banknote, FileText, ExternalLink, Loader2, Plus } from 'lucide-react';
-import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, query, onSnapshot, orderBy, getDocs, doc, getDoc, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/auth';
-import { Payment } from '../types';
+import { Payment, Order, Product } from '../types';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import { format } from 'date-fns';
+import InvoiceModal from '../components/billing/InvoiceModal';
+import toast from 'react-hot-toast';
 
 const Payments: React.FC = () => {
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  
+  const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   
   const { user, hasRole } = useAuthStore();
 
   useEffect(() => {
     if (!user) return;
 
-
-    // Real-time payments listener
-    let q = query(collection(db, 'payments'), orderBy('createdAt', 'desc'));
-    // Filter logic based on role
-    // For MVP, HO/Logistics see all, RDC/Customer see theirs implicitly or we skip filtering for now
-
+    // 1. Real-time payments listener
+    const q = query(collection(db, 'payments'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const paymentList = snapshot.docs.map(doc => ({
+      let paymentList = snapshot.docs.map(doc => ({
         ...doc.data(),
         id: doc.id,
         createdAt: doc.data().createdAt?.toDate() || new Date(),
         paidAt: doc.data().paidAt?.toDate(),
       })) as Payment[];
+
+      if (hasRole('retail_customer')) {
+        paymentList = paymentList.filter(p => p.customerId === user.id);
+      }
+
       setPayments(paymentList);
       setIsLoading(false);
     }, (error) => {
@@ -38,8 +45,39 @@ const Payments: React.FC = () => {
       setIsLoading(false);
     });
 
+    // 2. Fetch products for invoice line items
+    const fetchProducts = async () => {
+      try {
+        const snap = await getDocs(collection(db, 'products'));
+        setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() } as Product)));
+      } catch (err) {
+        console.error('Error fetching products:', err);
+      }
+    };
+
+    fetchProducts();
+
     return () => unsubscribe();
   }, [user, hasRole]);
+
+  const handleViewInvoice = async (orderId: string) => {
+    try {
+      const orderDoc = await getDoc(doc(db, 'orders', orderId));
+      if (orderDoc.exists()) {
+        const data = orderDoc.data();
+        setSelectedOrder({
+          id: orderDoc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+        } as Order);
+        setIsInvoiceOpen(true);
+      } else {
+        toast.error('Order not found');
+      }
+    } catch (error) {
+      toast.error('Failed to load invoice');
+    }
+  };
 
   const getStatusColor = (status: Payment['status']) => {
     switch (status) {
@@ -134,7 +172,9 @@ const Payments: React.FC = () => {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {payments.map((payment) => (
                   <tr key={payment.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors text-sm">
-                    <td className="px-6 py-4 text-gray-600 dark:text-gray-400">{format(payment.createdAt, 'MMM d, yyyy')}</td>
+                    <td className="px-6 py-4 text-gray-600 dark:text-gray-400">
+                      {payment.createdAt instanceof Date ? format(payment.createdAt, 'MMM d, yyyy') : 'N/A'}
+                    </td>
                     <td className="px-6 py-4 font-mono font-medium text-blue-600">#{payment.id.slice(-8).toUpperCase()}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-gray-900 dark:text-white">
@@ -151,7 +191,10 @@ const Payments: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button className="text-gray-400 hover:text-blue-500 transition-colors">
+                      <button 
+                        onClick={() => handleViewInvoice(payment.orderId)}
+                        className="text-gray-400 hover:text-blue-500 transition-colors"
+                      >
                         <FileText className="w-5 h-5 ml-auto" />
                       </button>
                     </td>
@@ -167,6 +210,13 @@ const Payments: React.FC = () => {
           </div>
         )}
       </Card>
+
+      <InvoiceModal 
+        isOpen={isInvoiceOpen} 
+        onClose={() => setIsInvoiceOpen(false)} 
+        order={selectedOrder} 
+        products={products} 
+      />
     </div>
   );
 };

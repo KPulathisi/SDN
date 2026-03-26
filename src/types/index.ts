@@ -98,6 +98,7 @@ export interface Location {
 export interface Payment {
   id: string;
   orderId: string;
+  customerId: string;
   amount: number;
   status: PaymentStatus;
   method: 'card' | 'cash' | 'bank_transfer';

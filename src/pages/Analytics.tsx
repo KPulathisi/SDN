@@ -7,7 +7,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   AreaChart, Area, PieChart, Pie, Cell 
 } from 'recharts';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 const Analytics: React.FC = () => {
@@ -16,39 +16,69 @@ const Analytics: React.FC = () => {
 
   useEffect(() => {
     const fetchAnalytics = async () => {
-      // In a real production app, we would use BigQuery or a dedicated 
-      // analytics service, but for MVP we'll aggregate some Firestore data.
       try {
-        const orderSnap = await getDocs(collection(db, 'orders'));
-        const orders = orderSnap.docs.map(d => d.data());
-        
+        const [orderSnap, userSnap, rdcSnap, deliverySnap] = await Promise.all([
+          getDocs(collection(db, 'orders')),
+          getDocs(query(collection(db, 'users'), where('role', '==', 'retail_customer'))),
+          getDocs(collection(db, 'rdcs')),
+          getDocs(collection(db, 'deliveries'))
+        ]);
+
+        const orders = orderSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        const rdcs = rdcSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        const deliveries = deliverySnap.docs.map(d => d.data() as any);
+
         const totalRevenue = orders.reduce((acc, o) => acc + (o.totalAmount || 0), 0);
         const totalOrders = orders.length;
         
-        // Mocking some time-series data for the charts
-        const salesStats = [
-          { name: 'Mon', value: 4000 },
-          { name: 'Tue', value: 3000 },
-          { name: 'Wed', value: 5000 },
-          { name: 'Thu', value: 2780 },
-          { name: 'Fri', value: 1890 },
-          { name: 'Sat', value: 2390 },
-          { name: 'Sun', value: 3490 },
-        ];
+        // Aggregate sales by RDC
+        const rdcSales: Record<string, number> = {};
+        orders.forEach(o => {
+          if (o.rdcId) rdcSales[o.rdcId] = (rdcSales[o.rdcId] || 0) + (o.totalAmount || 0);
+        });
 
-        const rdcDistribution = [
-          { name: 'Western RDC', value: 400, color: '#3B82F6' },
-          { name: 'Northern RDC', value: 300, color: '#10B981' },
-          { name: 'Southern RDC', value: 200, color: '#F59E0B' },
-          { name: 'Eastern RDC', value: 100, color: '#EF4444' },
-        ];
+        const rdcDistribution = rdcs.map((rdc, index) => ({
+          name: rdc.name,
+          value: rdcSales[rdc.id] || 0,
+          color: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'][index % 5]
+        })).filter(d => d.value > 0);
+
+        // Aggregate by day (last 7 days)
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const salesStats = days.map((day, i) => {
+          const date = new Date();
+          date.setDate(date.getDate() - (6 - i));
+          const dayName = days[date.getDay()];
+          const amount = orders
+            .filter(o => {
+              const oDate = o.createdAt?.toDate();
+              return oDate && oDate.toDateString() === date.toDateString();
+            })
+            .reduce((acc, o) => acc + (o.totalAmount || 0), 0);
+          return { name: dayName, value: amount };
+        });
+
+        // Calculate delivery success
+        const successful = deliveries.filter(d => d.status === 'delivered').length;
+        const deliverySuccess = deliveries.length > 0 
+          ? Math.round((successful / deliveries.length) * 1000) / 10 
+          : 100;
+
+        // New customers (last 30 days)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const newCustomers = userSnap.docs.filter(d => {
+          const cDate = d.data().createdAt?.toDate();
+          return cDate && cDate > thirtyDaysAgo;
+        }).length;
 
         setData({
           totalRevenue,
           totalOrders,
           salesStats,
           rdcDistribution,
-          deliverySuccess: 94.2,
+          deliverySuccess,
+          newCustomers
         });
       } catch (error) {
         console.error('Analytics error:', error);
@@ -143,7 +173,7 @@ const Analytics: React.FC = () => {
             </div>
           </div>
           <p className="text-sm text-gray-500 dark:text-gray-400">New Customers</p>
-          <h3 className="text-2xl font-bold dark:text-white">124</h3>
+          <h3 className="text-2xl font-bold dark:text-white">{data.newCustomers}</h3>
         </Card>
       </div>
 
